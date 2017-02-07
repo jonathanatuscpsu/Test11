@@ -1,0 +1,1049 @@
+---
+title: "Introduction to R"
+author: "Zhaohu(Jonathan) Fan"
+output:
+  html_document:
+    fig_height: 7
+    fig_width: 9
+    keep_md: yes
+    toc: yes
+    toc_float: yes
+---
+
+```{r include=FALSE}
+library(DataComputing)
+```
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+```
+# Activity 1: Stocks & Dividends
+### Getting Price Data
+
+```{r}
+# choose companies of interest
+companies <- c("F", "MMM", "GE")
+
+Prices <- read_stock_prices(companies, what = "daily", start_year = 2000, end_year = 2016)
+
+# inspect data
+head(Prices)
+
+# chart close vs date for each company
+Prices %>%
+  ggplot(aes(x = date, y = close)) + 
+  geom_line(aes(color = company))
+
+```
+
+
+### Buy/Sell Profit
+
+
+```{r}
+
+Actions <- 
+  data.frame(
+    action = c("buy", "sell"), 
+    date = ymd(c("2008-07-14", "2015-12-16"))
+  )
+
+# Combine the Prices & Actions tables
+SalesDifference <- 
+  Prices %>%
+  inner_join(Actions) %>%
+  select(company, action, close) %>%
+  spread(key = action, value = close) %>%
+  mutate(profit = sell - buy)
+
+# inspect the data table
+SalesDifference
+
+```
+
+
+### Indexing Prices
+
+```{r}
+# choose reference date
+ref_date <- ymd("2008-07-14")
+
+# establish reference value for indexing
+Reference <- 
+  Prices %>%
+  filter(date == ref_date) %>%
+  select(company, standard=close)  # renames close variable as "standard"
+
+# inspect the result
+Reference
+
+# index against reference value
+IndexData <- 
+  Prices %>%
+  left_join(Reference) %>%
+  transmute(company, date, index = close/standard)
+
+# inspect the result
+head(IndexData)
+
+# graph the indexes
+IndexData %>%
+  ggplot(aes(x = date, y = index)) + 
+  geom_line(aes(color = company))
+```
+
+
+### Dividends
+
+ Note that some companies don't issue dividends, so it must be removed or replaced before continuing.
+
+```{r eval=FALSE}
+# read dividend data
+Dividends <- read_stock_prices(companies, what = "dividends")
+
+# inspect the data
+head(Dividends)
+
+DividendsEarned <- 
+  Prices %>%
+  inner_join(Dividends) %>%
+  filter(ymd(date) <= ymd("2015-12-16"), ymd(date) >= ymd("2008-07-14")) %>%
+  select(company, dividends) %>%
+  group_by(company) %>%
+  summarise(totalDividends = sum(dividends))
+
+# inspect the result
+head(DividendsEarned)
+
+```
+
+```{r eval=FALSE}
+# earnings comparison
+SalesDifference %>%
+  inner_join(DividendsEarned)
+```
+
+
+# Activity 2: Bicycle Sharing
+### Set Up
+
+```{r}
+# Load the data sets into our RStudio environment as described in the text
+Stations <- mosaic::read.file("http://tiny.cc/dcf/DC-Stations.csv")
+
+# data_site <- "http://tiny.cc/dcf/2014-Q4-Trips-History-Data-Small.rds"  # small data with 10k rows
+data_site <- "http://tiny.cc/dcf/2014-Q4-Trips-History-Data.rds"        # full data with 600k rows
+
+Trips <- readRDS(gzcon(url(data_site)))
+
+# Inspect the data tables
+str(Stations)
+str(Trips)
+
+# packages loaded for A.5 leaflet graphic
+library(devtools)
+library(leaflet)
+```
+
+##### Check out times.
+
+The following plot uses the POSIXct data type associated with check-out times (variable: `sdate`).
+
+```{r}
+Trips %>%
+  ggplot(aes(x = sdate)) + 
+  geom_density(fill = "gray", color = NA)
+```
+
+
+### A.1 How Long?
+
+The following box & whisker plot shows the distribution of rental duration by client type with outliers removed.
+
+```{r}
+# select the variables of use for the activity & create a duration variable
+Trips <- 
+  Trips %>%
+  mutate(durMin = as.numeric(edate - sdate)/60)  # trip duration in minutes
+
+# inspect data table; discern units of "durMinutes"
+head(Trips)
+
+# boxplot
+Trips %>%
+  ggplot(aes(x = client, y = durMin)) + 
+  geom_boxplot() + 
+  ylim(0, 90) +           # restrict plot to 90 minutes or less
+  ylab("Rental Duration (min)") + 
+  xlab("Client Type")
+```
+
+
+###  A.2 When are bikes used?
+
+Explore bike use for the following: 
+
+* day of the year (1 to 365)
+* day of the week (Sunday to Saturday)
+* hour of the day (0 to 24)
+* minute in the hour (0 to 60)
+
+We first need to create these variables in the `Trips` data table using a `mutate()` statement.
+
+```{r}
+Trips <- 
+  Trips %>%
+  mutate(dayOfYear = lubridate::yday(sdate), 
+         dayOfWeek = lubridate::wday(sdate), 
+         dayOfWeekLabel = lubridate::wday(sdate, label = TRUE), 
+         hourOfDay = lubridate::hour(sdate), 
+         minuteOfHour = lubridate::minute(sdate))
+
+# head(Trips)     # Inspect data table (commented out for now)
+```
+
+##### Day of the year (1 to 365)
+
+The data suggest that usage declines toward the end of the year.  (Note: the data set is said to include "rental history over the last quarter of 2014" so there is no information in this data set for January through September)
+```{r}
+Trips %>%
+  ggplot(aes(x = dayOfYear)) + 
+  geom_density(fill = "gray", adjust = 2)
+```
+
+##### Day of the week (Sunday to Saturday)
+
+We see usage is quite consistent across the weekdays, and then a bit reduced on weekends.
+
+```{r}
+Trips %>%
+  ggplot(aes(x = dayOfWeek)) + 
+  geom_density(fill = "gray", adjust = 2)
+```
+
+Density isn't wrong, but it's a little goofy here.  Actually, it's pretty easy to turn the day of week from numeric to the names as we know them with `dayOfWeekLabel = lubridate::wday(sdate, label = TRUE)` so let's do that and make it a bar chart to see how that looks.  
+
+```{r}
+Trips %>%
+  ggplot(aes(x = dayOfWeekLabel)) + 
+  geom_bar(fill = "gray") 
+```
+
+
+
+##### Hour of the day (0 to 24)
+
+Few bicycles are checked out before 5am, and then we see usage spike near 8am and 5pm in concert with rush hour commuting.
+
+```{r}
+Trips %>%
+  ggplot(aes(x = hourOfDay)) + 
+  geom_density(fill = "gray", adjust = 2)
+```
+
+##### Minute in the hour (0 to 60)
+
+Usage appears to drop near the top of the hour. 
+
+```{r}
+Trips %>%
+  ggplot(aes(x = minuteOfHour)) + 
+  geom_density(fill = "gray", adjust = 2)
+```
+
+
+##### Group the bike rentals by hour, weekday, & client type
+
+We can see that the rush hour spikes (8am & 5pm) are much more pronounced among registered users on weekdays.
+
+```{r}
+Trips %>%
+  group_by(client, dayOfWeek, hourOfDay) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = hourOfDay, y = count)) + 
+  geom_line(aes(group = dayOfWeek, color = as.character(dayOfWeek))) + 
+  facet_wrap( ~ client)
+```
+
+
+##### Construct a similar plot using density rather than frequency
+
+The density appears to present the information in a more "relative" than "absolute" way.  The density could be misinterpreted to suggest that bicycle usage among casual users is higher than registered users.
+
+```{r}
+Trips %>%
+  ggplot(aes(x = hourOfDay)) + 
+  geom_density(aes(group = dayOfWeek, color = as.character(dayOfWeek))) + 
+  facet_wrap( ~ client)
+```
+
+
+###  A.3 How Far? 
+
+We want to calculate the distance between stations using the `haversine()` function.
+
+```{r}
+source("http://tiny.cc/dcf/haversine.R")
+```
+
+We want to create a table where a case is a *pair* of stations.  We first need to create tables that represent the starting station and another table that represents the ending station in each pair.  Since we ultimately want to join this information with the `Trips` data, we use the variable names `sstation` and `estation` since those represent the starting and ending stations we will want to match from that data table.
+
+```{r}
+# inspect the Stations data
+head(Stations)
+
+# create a working copy of the data & rename to identify starting Station
+Simple <- 
+  Stations %>%
+  rename(sstation = name)
+
+# create another copy and rename variables for use as the ending station
+Simple2 <- 
+  Simple %>%
+  rename(estation = sstation, lat2 = lat, long2 = long)
+
+# inspect Simple & Simple2
+head(Simple)
+head(Simple2)
+```
+
+
+In order to create pairs matching every single beginning station to every single ending station, we need a type of join called a Cartesian product of our startStation & endStation data tables.  The book explains that Cartesian products can be dangerous if the tables are too large, so you need to think before you do a join like this.  With 347 cases in each data table, the Cartesian product results in  $347 * 347 = 120409$ cases.  This is certainly a manageable size, so we'll proceed.
+
+```{r}
+# join the starting and ending data tables together
+StationPairs <- 
+  merge(Simple, Simple2, by = NULL)
+
+# inspect station pairs data table
+head(StationPairs)
+
+# compute distances with haversine()
+PairDistances <- 
+  StationPairs %>%
+  transmute(sstation, estation, distance = haversine(lat, long, lat2, long2)) 
+
+# inspect PairDistances
+head(PairDistances)
+
+```
+
+```{r}
+PairDistances %>%
+  ggplot(aes(x = distance)) + 
+  geom_density(fill = "gray")
+
+```
+
+The book says that "one end of Washington DC to the other is about 14.1 miles" so we need to investigate a bit further since our density plot of station distances doesn't seem to reflect that.  We see below that the furthest stations are about 37.03506 (units) apart.  We might first suspect (correctly) that the "units" produced by the `haversine()` function are kilometers and not miles.  Still, 14.1 miles is less than 23 km, but our largest possible distance pair is 37.03506 km (23 miles) from "Needwood Rd & Eagles Head Ct" to "Prince St & Union St".  A quick investigation using [Google Maps](https://goo.gl/maps/c2gecqmEeaP2) reveals a walking distance of about 25 miles between those locations.  Walking distance can come close to the true distance "as the crow flies" but a few minor detours would be required in order to walk on paved paths, cross the Potomac River, etc.  It looks like the distances have been calculated correctly, but the "hint" in the text book was perhaps misleading since "one end to the other" isn't necessarily the diameter between the most extreme points (i.e. corner to corner).
+
+```{r}
+PairDistances %>%
+  arrange(desc(distance)) %>%
+  head()
+```
+
+
+
+Next, we want to join the `PairDistances` table with `Trips` to calculate the start-to-end distance of each trip. 
+
+
+```{r}
+RideDistances <- 
+  Trips %>%
+  inner_join(PairDistances, by = c("sstation", "estation"))
+```
+
+The distances of the actual rides tend to be only a few kilometers or less.  Most rides are between stations that are fewer than about 5 kilometers apart.  Of course, the ride itself may be longer, but the stations aren't very far apart in absolute distance.  Most of the station pairs are farther apart than 5 km, but people don't tend to use the bicycle share program to travel that far since other transportation would probably be much more efficient (and possibly safer?) as travel distance increases.  
+
+Note: for the purpose of the assignment, it's fine to just show the plot of ride distances without adding the layer to show distance between pairs of stations on the same plot.  
+
+```{r}
+RideDistances %>%
+  ggplot(aes(x = distance)) + 
+  geom_density(fill = "gray") + 
+  geom_density(data = PairDistances, aes(x = distance), fill = "purple", alpha = 0.1)
+```
+
+
+###  A.4 Mapping the Stations
+
+```{r}
+stationMap <- 
+  leaflet(Stations) %>%
+  addTiles() %>%
+  addCircleMarkers(radius = 2, color = "red") %>%
+  setView(-77.04, 38.9, zoom = 12) 
+
+stationMap
+```
+
+
+### A.5 Long-distance stations 
+
+Based on the map, the median distance traveled from each station appears to be negatively correlated with station density.  In other words, when there are many stations in close proximity the median ride distance tends to be shorter by comparison to areas of the city where the ride stations are more sparse.
+
+```{r}
+StationPairMap <- 
+  RideDistances %>%
+  rename(name = sstation) %>% # rename to facilitate join operation
+  left_join(Stations) %>%     # adds lat & long
+  transmute(name, lat, long, distProxy = distance * 1000/3) %>%
+  group_by(name, lat, long) %>%
+  summarise(medDist = median(distProxy))
+
+head(StationPairMap)
+
+distanceMap <-
+  leaflet(StationPairMap) %>%
+  addTiles() %>%
+  addCircleMarkers(radius = 2, color = "red") %>%
+  addCircles(radius = ~ medDist, color = "blue", opacity = 0.0001) %>%
+  setView(-77.04, 38.9, zoom = 12)
+
+distanceMap
+
+```
+
+
+Based on the map, the median distance traveled from each station appears to be negatively correlated with station density.  In other words, when there are many stations in close proximity the median ride distance tends to be shorter by comparison to areas of the city where the ride stations are more sparse.  
+
+With a small modification (i.e. `addCircleMarkers(radius = 2, color = "red", opacity = ~ freqUsage)`), we can darken the location marker of each bicycle share station to reflect the frequency of it's use.  With this information included, the plot below shows that near the city center rides tend to be shorter distances and the stations are utilized much more frequently.  By contrast, near the fringes of the city rides tend to be longer distances and the stations are utilized less frequently.
+
+```{r}
+StationPairMap <- 
+  RideDistances %>%
+  rename(name = sstation) %>% # rename to facilitate join operation
+  left_join(Stations) %>%     # adds lat & long
+  transmute(name, lat, long, distProxy = distance * 1000/3) %>%
+  group_by(name, lat, long) %>%
+  summarise(medDist = median(distProxy), freqUsage = 0.0002 * n())
+
+freqMap <-
+  leaflet(StationPairMap) %>%
+  addTiles() %>%
+  addCircleMarkers(radius = 2, color = "red", opacity = ~ freqUsage) %>%
+  addCircles(radius = ~ medDist, color = "blue", opacity = 0.0001) %>%
+  setView(-77.04, 38.9, zoom = 12)
+
+freqMap
+
+```
+
+
+# Activity 3: Statistics of Gene Expression
+### Set-Up
+
+```{r}
+data("NCI60")
+data("NCI60cells")
+```
+
+
+### Simple Graphics for Gene Expression
+
+```{r}
+## Inspect raw data
+# head(NCI60)
+# head(NCI60cells)
+
+## Convert NCI60 to narrow & drop "Probe" variable
+Narrow <- 
+  NCI60 %>%
+  tidyr::gather(cellLine, expression, -Probe)
+
+## Inspect results
+# head(Narrow)
+
+## select cellLine & tissue from NCI60cells data; the `gsub()` function is used to conform cellLine to match the NCI60 syntax
+CellTypes <- 
+  NCI60cells %>%
+  select(cellLine, tissue) %>%
+  mutate(cellLine = gsub("\\:", ".", as.character(cellLine)))
+
+## Inspect results
+# head(CellTypes)
+
+## reduce data to cases with matching `cellLine` from both tables
+Narrow <- 
+  Narrow %>%
+  inner_join(CellTypes)
+
+## Inspect result
+head(Narrow)
+```
+
+We can now extract the expression of TOP3A for each cell line and calculate the mean expression for each tissue type.
+
+```{r}
+## restrict data to include only the TOP3A probes
+Probe_TOP3A <- 
+  Narrow %>% filter(Probe=="TOP3A")
+
+## calculate mean expression (note: `exp(x)` is syntax for e^x where "e" is Euler's number: approx. 2.718)
+SummaryStats <- 
+  Probe_TOP3A %>%
+  group_by(tissue) %>%
+  summarise(mn_expr = exp(mean(expression, na.rm = TRUE)))
+
+## Inspect the result (reproduce Table A.8)
+kable(SummaryStats)
+
+## Bar chart of mean expression of TOP3A (Figure A.6)
+SummaryStats %>%
+  ggplot(aes(x = tissue, y = mn_expr)) + 
+  geom_bar(stat = "identity") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+## dot plot of mean expression of TOP3A (Figure A.7)
+Probe_TOP3A %>%
+  ggplot(aes(x = tissue, y = exp(expression))) + 
+  geom_point() + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+
+##### Critique of Figure A.6
+
+Some of the shortcomings of Figure A.6 might include:
+* bars alone may oversimplify the data leading to misinterpretation
+* may be useful to order the bars by height to facilitate tissue comparisons
+* precision of the estimate is not shown
+* too much ink
+
+##### Improving the graphic
+
+1. Lighten up the color using `alpha = 0.2` or perhaps switch to a dot plot (i.e. Figure A.7)
+
+2. Reorder the tissue types
+
+3. Show statistical measure of variation
+
+```{r}
+## Calculate mean, standard error, and confidence interval
+SummaryStats <-
+  Probe_TOP3A %>%
+  group_by(tissue) %>%
+  summarise(mn = mean(expression, na.rm = TRUE), 
+            se = sd(expression, na.rm = TRUE) / sqrt( n() )) 
+```
+
+
+4. Show the expression value for each of the individual cases in `MyProbe` (i.e. `TOP3A` here)
+
+5. Use different modality, e.g. dot plot, box plot (`notch = TRUE`), violin plot
+
+##### Reproduce Dot Plot with Confidence Intervals (Figure A.8)
+
+```{r}
+SummaryStats %>%
+  ggplot(aes(x = tissue, y = exp(mn))) + 
+  geom_bar(stat = "identity", fill = "gray", color = NA) + 
+  geom_point(data = Probe_TOP3A, aes(x = tissue, y = exp(expression))) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+
+```
+
+##### Reproduce "Dynamite Plot" in Figure A.9
+
+```{r}
+## Calculate mean, standard error, and confidence interval
+SummaryStats <-
+  SummaryStats %>%
+  mutate(top = mn + 2 * se, 
+         bottom = mn - 2 * se)
+
+
+## "Dynamite Plot"
+SummaryStats %>% 
+  ggplot(aes(x = tissue, y = exp(mn))) + 
+  geom_bar(stat = "identity", alpha = 0.2) + 
+  geom_errorbar(aes(x = tissue, 
+                    ymax = exp(top), 
+                    ymin = exp(bottom)), width = 0.5) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+  
+```
+
+
+##### Reproduce Dot Plot with Confidence Intervals (Figure A.10)
+
+```{r}
+
+SummaryStats %>% 
+  ggplot(aes(x = tissue, y = exp(mn))) + 
+  geom_errorbar(aes(x = tissue, 
+                    ymax = exp(top), 
+                    ymin = exp(bottom)), width = 0.5) + 
+  geom_point(data = Probe_TOP3A, aes(x = tissue, y = exp(expression))) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+
+
+```
+
+
+### Probing for a Probe
+
+Create a function to calculate R-squared, and apply the function to each `Probe`. 
+
+```{r}
+## Create function to calculate r-squared
+r2 <- function(data) {
+  mosaic::rsquared(lm(data$expression ~ data$tissue))
+}
+
+## apply function to each `Probe` (takes a while because there are a lot of probes)
+ProbeR2 <- 
+  Narrow %>%
+  group_by(Probe) %>%
+  do(r2 = r2(.)) %>%
+  mutate(r2 = unlist(r2))
+
+## Order the Probes by R2, and pull out the 30 largest
+Actual <- 
+  ProbeR2 %>%
+  arrange(desc(r2)) %>%
+  head(30) %>%
+  mutate(Probe = reorder(Probe, desc(r2)))
+
+## Show as a table
+kable(Actual)
+
+## Graph probes with top 30 r-squared
+Actual %>%
+  ggplot(aes(x = Probe, y = r2)) + 
+  geom_point() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+### Choose a probe with high r-squared and create a plot like Figure A.10
+
+I chose to investigate probe PLK2 (for no particular reason).  A noteworthy difference between the plot associated with PLK2 and Figure A.10 based on TOP3A, is that there is a much more apparent association between certain tissue types and the probe.  Namely, the probe is much more common among renal tissue by compasion to the other tissue types studied.
+
+```{r}
+
+## I selected Probe PLK2, but any probe from the top 30 is fine.
+Probe_PLK2 <- 
+  Narrow %>% filter(Probe=="PLK2")
+
+## Calculate mean, standard error, and confidence interval
+SummaryStats_PLK2 <-
+  Probe_PLK2 %>%
+  group_by(tissue) %>%
+  summarise(mn = mean(expression, na.rm = TRUE), 
+            se = sd(expression, na.rm = TRUE) / sqrt( n() )) %>%
+  mutate(top = mn + 2 * se, 
+         bottom = mn - 2 * se)
+
+## Reproduce Figure A.10 for Probe PLK2
+SummaryStats_PLK2 %>% 
+  ggplot(aes(x = tissue, y = exp(mn))) + 
+  geom_errorbar(aes(x = tissue, 
+                    ymax = exp(top), 
+                    ymin = exp(bottom)), width = 0.5) + 
+  geom_point(data = Probe_PLK2, aes(x = tissue, y = exp(expression))) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+
+### False Discoveries
+
+Generate a Null distribution in order to observe outcomes that might happen just by chance if in fact there were really no assocation at all between probe and tissue type.  We then compare our observed result to the Null distribution in order to determine whether there is a compelling difference between our result and the sort of outcomes we would expect to observe just by chance if the null hypothesis were true (i.e. if there were no association at all between probe & tissue type).
+
+```{r}
+## Build null distribution by breaking the association between probe and tissue
+NullR2 <- 
+  Narrow %>%
+  group_by(Probe) %>%
+  mutate(expression = mosaic::shuffle(expression)) %>%
+  group_by(Probe) %>%
+  do(r2 = r2(.)) %>%
+  mutate(r2 = unlist(r2))
+
+##  Comparison of null distibution to the R2 observed for the actual data
+ProbeR2 %>%
+  ggplot(aes(x = r2)) + 
+  geom_density(fill = "gray30", color = NA) + 
+  geom_density(data = NullR2, aes(x = r2), 
+               fill = "gray80", alpha = 0.75, color = NA)
+
+
+```
+
+
+Lastly, we compare the top 30 observed r-squared values with the top 30 values produced in the null distribution.  Since we generated the null distrubtion using random simulations (via `mosaic::shuffle()`), your results need not be identical to the picture in the book.  In fact they may appear slightly different each time you refresh the analysis!  Even still, the conclusion holds that none of the top 30 r-squared values for the actual data lie anywhere near those from the null hypothesis.
+
+```{r}
+Null <- 
+  NullR2 %>%
+  arrange(desc(r2)) %>%
+  head(30)
+
+Actual$null <- Null$r2
+
+Actual %>%
+  ggplot(aes(x = Probe, y = r2)) + 
+  geom_point() + 
+  geom_point(aes(y = null), color = "gray50") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+# Activity 4: Scraping Nuclear Reactors
+### Set-Up
+
+```{r}
+library(rvest)
+library(lubridate)
+```
+
+
+### Nuclear Reactor Data
+
+The Nuclear Reactor Data are scraped from Wikipedia: <https://en.wikipedia.org/wiki/List_of_nuclear_reactors>
+
+
+### Locate & Inspect Japan Reactor Data
+
+While scraping all tables on teh page, R reports a "subscript out of bounds" error.  We instead locate the Japan table directly, and then scrape it (this seems like the more direct way to scrape a single table anyway).
+
+```{r}
+page <- "https://en.wikipedia.org/wiki/List_of_nuclear_reactors"
+XPATH <- '//*[@id="mw-content-text"]/table[23]'
+'//*[@id="mw-content-text"]/table'
+
+table_list <- 
+  page %>%
+  read_html() %>%
+  html_nodes(xpath = XPATH) %>%
+  html_table(fill = TRUE)
+
+# extract the data table from the "list" (even though the list only has one data table in it)
+Japan <- table_list[[1]]
+
+# Inspect data table 
+str(Japan)
+head(Japan)
+```
+
+### Data Cleaning
+
+In what ways is the data table tidy?  
+
+* each column is a variable
+* rows are mostly cases (not quite tidy, but close)
+
+In what ways is the data table NOT tidy?  
+
+* first row is a continuation of variable names (not a case)
+* DataComputing text alleges missing columns, but I didn't have that issue...
+
+##### Cleaning Up Variable Names
+
+```{r}
+# create unique names for variables 4 & 7
+names(Japan)[c(4, 7)] <- c("model", "grossMW")
+
+# Inspect result
+head(Japan)
+
+# cleaning up the Japan Data
+Japan <- 
+  Japan %>%
+  filter(row_number() > 1) %>%      # drop the first row in the table (continuation of names)
+  rename(name = Name, reactor = `Reactor No.`,    # Note the use of back-ticks for names with a space: `
+         type = Reactor, status = Status, 
+         netMW = `Capacity in MW`, 
+         construction = `Construction Start Date`, 
+         operation = `Commercial Operation Date`, closure = Closure)
+
+head(Japan)
+```
+
+##### Cleaning Up Variable Formats
+
+From `str()` we can see that everything is treated as character strings (even numeric and date variables).
+
+```{r}
+str(Japan)
+```
+
+Let's convert each variable to the most appropriate type using `mutate()`.  Notice the warning "Warning: 5 failed to parse".  Can you spot from the original data table which 5 values may have caused the warning and why R may have failed to reformat them?  (Hint: look at the closure dates).  It's important to pay attention to warnings and understand where they come from!
+
+```{r}
+Japan <- 
+  Japan %>%
+  mutate(netMW = as.numeric(netMW), grossMW = as.numeric(grossMW)) %>%   
+  mutate(construction = dmy(construction), operation = dmy(operation), closure = dmy(closure))  
+
+# Inspect Result
+head(Japan)
+  
+```
+
+###Plot Net Generation Capacity vs Construction Date
+
+Here are a few possible observations from the graph:
+
+* most reactors are either type "PWR" or "BWR"
+* there is a slight positive trend indicating that perhaps reactors constructed more recently have greater net generation capacity
+* type "PWR" reactors may appear to be associated with slightly greater net generation capacity than "BWR" reactors constructed near the same time
+
+```{r}
+Japan %>% 
+  ggplot(aes(y = netMW, x = construction)) + 
+  geom_point(aes(color = type))
+```
+
+
+### Scrape & Merge China Data
+
+##### Scrape (& Clean)
+
+Since you're doing the same steps as before, you should use copy and paste liberally and just make small changes to adapt the code to the China data.  No need to re-type the whole thing!  You may get a few warnings again (at least I did), can you track down the problem cases in the original table?  
+
+```{r}
+
+# same webpage as before
+page <- "https://en.wikipedia.org/wiki/List_of_nuclear_reactors"
+
+# new xpath (we need the China table)
+XPATH <- '//*[@id="mw-content-text"]/table[12]'
+
+table_list <- 
+  page %>%
+  read_html() %>%
+  html_nodes(xpath = XPATH) %>%
+  html_table(fill = TRUE)
+
+# extract the data table from the "list" (even though the list only has one data table in it)
+China <- table_list[[1]]
+
+# Inspect data table 
+str(China)
+head(China)
+
+
+# create unique names for variables 4 & 7
+names(China)[c(4, 7)] <- c("model", "grossMW")
+
+# cleaning up the China Data (almost identical to Japan cleaning)
+China <- 
+  China %>%
+  filter(row_number() > 1) %>%      
+  rename(name = Name, reactor = `Reactor No.`,
+         type = Reactor, status = Status, 
+         netMW = `Capacity in MW`, 
+         construction = `Construction Start Date`, 
+         operation = `Commercial Operation Date`, closure = Closure) %>%
+  mutate(netMW = as.numeric(netMW), grossMW = as.numeric(grossMW)) %>%   
+  mutate(construction = dmy(construction), operation = dmy(operation))  
+
+head(China)
+```
+
+
+##### Merging China and Japan
+
+```{r}
+Japan <- 
+  Japan %>%
+  mutate(country = "Japan")
+
+China <- 
+  China %>%
+  mutate(country = "China")
+
+# Inspect the results
+head(Japan)
+head(China)
+
+# Combine them together
+China_Japan <- rbind(China, Japan)
+
+# Inspect Results
+str(China_Japan)   # structure
+head(China_Japan)  # first rows
+tail(China_Japan)  # last rows
+```
+
+
+
+
+### Make Info Graphic of Japan Reactors
+
+```{r fig.height=12, fig.width=9}
+Japan %>%
+  mutate(name_reactor = paste(name, reactor)) %>%
+  ggplot(aes(y = name_reactor, x = operation, size = 4)) + 
+  geom_segment(aes(y = name_reactor, yend = name_reactor, x = construction, xend = operation, color = type)) + 
+  geom_point(aes(y = name_reactor, x = closure, shape = status))
+
+```
+
+
+
+# Activity 5: Bird Species
+
+When you're finished with this activity, you will have a graph that shows what time of year various species appear at the Katherine Ordway Natural History Study Area in Inver Grove Heights, MN.
+
+### Set Up
+
+```{r}
+# Load the BabyNames data set into our RStudio environment
+data("OrdwayBirds")
+
+# Inspect the data
+str(OrdwayBirds)
+```
+
+
+
+### Step 0
+
+Before we begin, the book gives us some instructions to select a few key variables and clean up the date formatting.  Use the commands given in the book, but be sure to study the functions used so you know what is happening.  In this case, we select `SpeciesName`, `Month`, and `Date`. Then a `mutate()` command converts each variable to character, and then converts the resulting "character string" to a number.
+
+```{r}
+# Get the data table & clean up dates (see Data Computing p. 163)
+OrdwayBirds <- 
+  OrdwayBirds %>%
+  select(SpeciesName, Month, Day) %>%
+  mutate(Month = as.numeric(as.character(Month)), 
+         Day = as.numeric(as.character(Day)))
+
+# Inspect result
+head(OrdwayBirds)
+```
+
+
+### Step 1
+
+There are 275 unique "species names" in the `OrdwayBirds` data if mis-spellings are counted among the unique entries, and 109 distinct species.
+
+```{r}
+# unique species in original data (including mis-spellings)
+OrdwayBirds %>%
+  summarise(uniqueNamesMisSpelled = n_distinct(SpeciesName))
+
+# unique species in the clean list
+OrdwaySpeciesNames %>%
+  summarise(uniqueSpecies = n_distinct(SpeciesNameCleaned))
+```
+
+
+### Step 2
+  
+* The `inner_join()` uses the `SpeciesName` variable found in both data tables to match cases.  
+* The variables that were added to the `Corrected` table include a clean version of species names called `Species`, as well as the `Month` and `Day` of the bird sightings recorded.
+
+```{r}
+# inspect OrdwaySpeciesNames
+str(OrdwaySpeciesNames)
+
+# inner join
+Corrected <- 
+  OrdwayBirds %>%
+  inner_join(OrdwaySpeciesNames) %>%
+  select(Species = SpeciesNameCleaned, Month, Day) %>%
+  na.omit()  ## clened up missing names
+
+# inspect the data after the join
+head(Corrected)
+```
+
+
+### Step 3
+
+We want to identify the top 5 bird species sighted at the Katherine Ordway Natural History Study Area.
+
+```{r}
+# count sightings by species in descending order
+SpeciesCount <- 
+  Corrected %>%
+  group_by(Species) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+# a hint on p.164 recommends displaying the top 10 species to choose our threshold
+head(SpeciesCount, 10)
+
+# create a sightings threshold that we will use to define the major species
+threshold <- 750 
+
+Majors <-
+  SpeciesCount %>%
+  filter(count >= threshold)  # threshold is just a scalar defined above
+
+Majors
+```
+
+
+### Step 4
+
+We now want to produce a month-by-month count for each of the major species, and then construct a chart to tell the story of what time of year the various species appear.
+
+```{r}
+ByMonth <- 
+  Majors %>%
+  left_join(Corrected) %>%
+  group_by(Month, Species) %>%
+  summarise(count = n()) %>%
+  arrange(Month, desc(count))
+
+```
+
+Now, using `barGraphHelper()` in the console, we can configure a reasonable graph and choose "show expression" to get `ggplot2` that can be embedded in our report.
+
+
+
+```{r}
+ggplot(data=ByMonth,aes(x=Month,y=count ,fill=Species)) + geom_bar(stat='identity',position='dodge', width=.9) 
+
+```
+
+According to the graph, we can answer the questions posed:
+
+##### 1. Which species are present year-round?  
+
+It appears that the American Goldfinch, and Black-capped Chickadee were sighted every month (though with fluctuation)
+
+##### 2. Which species are migratory, that is, primarily present in one or two seasons?
+
+(solutions vary) It appears that the Field Sparrow, Slate-colored Junco, and Lincoln's Sparrow appear to be primarily present in one or two seasons and are likely migratory.
+
+##### 3. What is the peak month for each major species?
+
+* American Goldfinch: October (10)
+* Black-capped Chickadee: November (11)
+* Field Sparrow: May (5)
+* Lincoln's Sparrow: October (10)
+* Slate-colored Junco: October (10)
+* Tree Swallow: April (4)
+
+If we set a threshold for "seen in good numbers" as 100 sightings in a month based on the graph (i.e. a little over 3 per day), then we might conclude that Field Sparrows, Slate-Colored Juncos, and Tree Swallows are seen "in good numbers" for at least 6 months of the year.  A few lines of code can validate what we're seeing visually in the graph:
+
+```{r}
+ByMonth %>%
+  filter(count >= 100) %>%
+  group_by(Species) %>%
+  summarise(monthsPresent = n_distinct(Month)) %>%
+  filter(monthsPresent >= 6)
+```
+
+
+
+
+
+
+
